@@ -14,6 +14,10 @@ import os
 import json
 from tqdm import tqdm
 
+# Load environment variables from .env file
+from dotenv import load_dotenv
+load_dotenv()
+
 # API clients
 from together import Together
 from openai import OpenAI
@@ -264,18 +268,32 @@ def query_server(
                 reasoning_effort=reasoning_effort,
             )
         else:
-            response = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": prompt},
-                ],
-                stream=False,
-                temperature=temperature,
-                n=num_completions,
-                max_tokens=max_tokens,
-                top_p=top_p,
-            )
+            # For o3 models, use max_completion_tokens instead of max_tokens
+            if model.startswith("o3"):
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": prompt},
+                    ],
+                    stream=False,
+                    n=num_completions,
+                    max_completion_tokens=max_tokens,
+                    top_p=top_p,
+                )
+            else:
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": prompt},
+                    ],
+                    stream=False,
+                    temperature=temperature,
+                    n=num_completions,
+                    max_tokens=max_tokens,
+                    top_p=top_p,
+                )
         outputs = [choice.message.content for choice in response.choices]
     elif server_type == "together":
         response = client.chat.completions.create(
