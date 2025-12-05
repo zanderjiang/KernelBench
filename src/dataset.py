@@ -14,6 +14,7 @@ REPO_TOP_PATH = os.path.abspath(
     )
 )
 KERNEL_BENCH_PATH = os.path.join(REPO_TOP_PATH, "KernelBench")
+TILEBENCH_BENCHMARK_PATH = os.path.join(REPO_TOP_PATH, "..", "..", "TileBench-Benchmark")
 
 
 def assign_problem_hash(problem_path: str) -> list[int]:
@@ -144,3 +145,83 @@ level3_representative_subset = [
 ]
 
 level3_representative_subset_problem_ids = [1, 5, 8, 11, 20, 33, 38, 43]
+
+
+################################################################################
+# TileBench Dataset Construction
+################################################################################
+
+def construct_tilebench_dataset(level: str) -> list[str]:
+    """
+    Construct a list of paths to TileBench reference.py files for a given level.
+    
+    Args:
+        level: "basic", "medium", or "advanced"
+        
+    Returns:
+        List of paths to reference.py files, sorted alphabetically by problem name
+    """
+    level_dir = os.path.join(TILEBENCH_BENCHMARK_PATH, level)
+    
+    if not os.path.exists(level_dir):
+        raise ValueError(f"TileBench level directory not found: {level_dir}")
+    
+    dataset = []
+    
+    # Iterate through problem directories
+    for problem_name in sorted(os.listdir(level_dir)):
+        problem_path = os.path.join(level_dir, problem_name)
+        
+        # Skip if not a directory
+        if not os.path.isdir(problem_path):
+            continue
+        
+        # Skip example problems
+        if problem_name.startswith("example-"):
+            continue
+        
+        # Check if reference.py exists
+        reference_path = os.path.join(problem_path, "reference.py")
+        if os.path.exists(reference_path):
+            dataset.append(reference_path)
+    
+    return dataset
+
+
+def get_tilebench_level_mapping() -> dict:
+    """
+    Map numeric levels to TileBench level names for backward compatibility.
+    
+    Returns:
+        Dict mapping integers to level names
+    """
+    return {
+        1: "basic",
+        2: "medium",
+        3: "advanced",
+    }
+
+
+def construct_dataset_unified(level) -> list[str]:
+    """
+    Unified dataset constructor that works with both KernelBench and TileBench.
+    
+    Args:
+        level: Either an integer (1-3 for TileBench, 1-4 for KernelBench) or 
+               a string ("basic", "medium", "advanced")
+    
+    Returns:
+        List of paths to problem files (reference.py for TileBench, .py for KernelBench)
+    """
+    # If level is a string, assume TileBench
+    if isinstance(level, str):
+        return construct_tilebench_dataset(level)
+    
+    # If level is an integer, check if TileBench path exists
+    if os.path.exists(TILEBENCH_BENCHMARK_PATH):
+        level_mapping = get_tilebench_level_mapping()
+        if level in level_mapping:
+            return construct_tilebench_dataset(level_mapping[level])
+    
+    # Fall back to KernelBench
+    return construct_kernelbench_dataset(level)

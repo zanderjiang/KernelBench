@@ -8,7 +8,8 @@ import torch
 from datasets import load_dataset
 from pydra import Config, REQUIRED
 
-from src.dataset import construct_kernelbench_dataset
+from src.dataset import construct_kernelbench_dataset, construct_tilebench_dataset
+from src.tilebench_eval import is_tilebench_reference, get_tilebench_problem_description
 from src.eval import eval_kernel_against_ref
 from src.prompt_constructor_toml import get_prompt_for_backend, get_custom_prompt
 from src.utils import (
@@ -106,6 +107,7 @@ def generate_sample_single(
     run_dir: str,
 ) -> bool:
     # 1. Fetch Problem
+    is_tilebench = False
     if config.dataset_src == "huggingface":
         curr_problem_row = dataset.filter(
             lambda x: x["problem_id"] == work.problem_id, desc=None
@@ -120,14 +122,26 @@ def generate_sample_single(
         )  # due to dataset list being 0-indexed locally
         ref_arch_path = dataset[problem_idx_in_dataset]
 
-        problem_name = os.path.basename(ref_arch_path)
-        ref_arch_src = read_file(ref_arch_path)
+        # Check if this is a TileBench reference
+        is_tilebench = is_tilebench_reference(ref_arch_path)
+        
+        if is_tilebench:
+            # For TileBench, problem_name is the directory name
+            problem_name = os.path.basename(os.path.dirname(ref_arch_path))
+            # Get formatted problem description for TileBench
+            ref_arch_src = get_tilebench_problem_description(ref_arch_path)
+        else:
+            # For KernelBench, use the file name
+            problem_name = os.path.basename(ref_arch_path)
+            ref_arch_src = read_file(ref_arch_path)
 
-    # Extract problem number from problem name (e.g. "1" from "1_Square_matrix_multiplication_.py")
-    problem_number = int(problem_name.split("_")[0])
-    assert (
-        problem_number == work.problem_id
-    ), f"Problem number in filename ({problem_number}) does not match config problem_id ({config.problem_id})"
+    # Validate problem number for non-TileBench datasets
+    if not is_tilebench:
+        # Extract problem number from problem name (e.g. "1" from "1_Square_matrix_multiplication_.py")
+        problem_number = int(problem_name.split("_")[0])
+        assert (
+            problem_number == work.problem_id
+        ), f"Problem number in filename ({problem_number}) does not match config problem_id ({work.problem_id})"
 
     if config.custom_prompt_key:
         custom_prompt = get_custom_prompt(
@@ -268,7 +282,11 @@ def main(config: GenerationConfig):
         dataset = load_dataset(config.dataset_name)
         curr_level_dataset = dataset[f"level_{config.level}"]
     elif config.dataset_src == "local":
-        curr_level_dataset = construct_kernelbench_dataset(config.level)
+        # Check if level is a string (TileBench) or integer (KernelBench)
+        if isinstance(config.level, str):
+            curr_level_dataset = construct_tilebench_dataset(config.level)
+        else:
+            curr_level_dataset = construct_kernelbench_dataset(config.level)
 
     num_problems_in_level = len(curr_level_dataset)
 

@@ -18,7 +18,8 @@ from pydra import Config, REQUIRED
 # Import only what we need
 from src import compile, eval, utils
 
-from src.dataset import construct_kernelbench_dataset
+from src.dataset import construct_kernelbench_dataset, construct_tilebench_dataset
+from src.tilebench_eval import eval_kernel_against_tilebench_ref, is_tilebench_reference
 from src.eval import (
     build_compile_cache,
     get_error_name,
@@ -168,6 +169,8 @@ class ModalEvaluator:
     def evaluate_single_sample_modal(
         self,
         ref_arch_src: str,
+        ref_arch_path: str,
+        is_tilebench: bool,
         kernel_src: str,
         gpu_arch: list[str],
         num_correct_trials: int = 5,
@@ -208,18 +211,32 @@ class ModalEvaluator:
 
         gpu_corrupted = False
         try:
-            result = eval_kernel_against_ref(
-                original_model_src=ref_arch_src,
-                custom_model_src=kernel_src,
-                measure_performance=measure_performance,
-                verbose=verbose,
-                num_correct_trials=num_correct_trials,
-                num_perf_trials=num_perf_trials,
-                build_dir=None,
-                device=torch.device("cuda:0"),
-                backend=backend,
-                precision=get_torch_dtype_from_string(precision),
-            )
+            if is_tilebench:
+                # Use TileBench evaluation
+                result = eval_kernel_against_tilebench_ref(
+                    reference_path=ref_arch_path,
+                    custom_kernel_src=kernel_src,
+                    backend=backend,
+                    verbose=verbose,
+                    measure_performance=measure_performance,
+                    num_correct_trials=num_correct_trials,
+                    num_perf_trials=num_perf_trials,
+                    precision=get_torch_dtype_from_string(precision),
+                )
+            else:
+                # Use KernelBench evaluation
+                result = eval_kernel_against_ref(
+                    original_model_src=ref_arch_src,
+                    custom_model_src=kernel_src,
+                    measure_performance=measure_performance,
+                    verbose=verbose,
+                    num_correct_trials=num_correct_trials,
+                    num_perf_trials=num_perf_trials,
+                    build_dir=None,
+                    device=torch.device("cuda:0"),
+                    backend=backend,
+                    precision=get_torch_dtype_from_string(precision),
+                )
         except (torch.cuda.CudaError, torch.AcceleratorError) as e:
             # GPU error detected - retire this container to prevent contamination
             gpu_corrupted = True
@@ -244,10 +261,13 @@ class ModalEvaluator:
 
 def fetch_ref_arch_from_problem_id(
     dataset, problem_id: int, dataset_src: str
-) -> str | None:
+) -> tuple[str, str, bool]:
     """
     Fetch reference architecture from problem directory
     Either from Hugging Face or Local Dataset
+    
+    Returns:
+        Tuple of (ref_arch_src, ref_arch_path, is_tilebench)
     """
     if dataset_src == "huggingface":
         curr_problem_row = dataset.filter(
@@ -255,6 +275,8 @@ def fetch_ref_arch_from_problem_id(
         )
         ref_arch_src = curr_problem_row["code"][0]
         problem_name = curr_problem_row["name"][0]
+        ref_arch_path = None
+        is_tilebench = False
 
     elif dataset_src == "local":
         problem_idx_in_dataset = (
@@ -262,17 +284,26 @@ def fetch_ref_arch_from_problem_id(
         )  # due to dataset list being 0-indexed locally
         ref_arch_path = dataset[problem_idx_in_dataset]
 
-        problem_name = os.path.basename(ref_arch_path)
-        ref_arch_src = read_file(ref_arch_path)
+        # Check if this is a TileBench reference
+        is_tilebench = is_tilebench_reference(ref_arch_path)
+        
+        if is_tilebench:
+            # For TileBench, we'll need the path for evaluation
+            problem_name = os.path.basename(os.path.dirname(ref_arch_path))
+            ref_arch_src = None  # Not needed for TileBench
+        else:
+            problem_name = os.path.basename(ref_arch_path)
+            ref_arch_src = read_file(ref_arch_path)
 
-    # verify
-    # Extract problem number from problem name (e.g. "1" from "1_Square_matrix_multiplication_.py")
-    problem_number = int(problem_name.split("_")[0])
-    assert (
-        problem_number == problem_id
-    ), f"Problem number in filename ({problem_number}) does not match config problem_id ({problem_id})"
+        # Validate problem number for non-TileBench datasets
+        if not is_tilebench:
+            # Extract problem number from problem name (e.g. "1" from "1_Square_matrix_multiplication_.py")
+            problem_number = int(problem_name.split("_")[0])
+            assert (
+                problem_number == problem_id
+            ), f"Problem number in filename ({problem_number}) does not match config problem_id ({problem_id})"
 
-    return ref_arch_src
+    return ref_arch_src, ref_arch_path, is_tilebench
 
 
 def fetch_kernel_from_disk(
@@ -303,7 +334,7 @@ def evaluate_single_sample(
         work_args.device,
     )
     # fetch reference architecture from problem directory
-    ref_arch_src = fetch_ref_arch_from_problem_id(
+    ref_arch_src, ref_arch_path, is_tilebench = fetch_ref_arch_from_problem_id(
         dataset, problem_id, configs.dataset_src
     )
 
@@ -320,18 +351,32 @@ def evaluate_single_sample(
     )
 
     try:
-        eval_result = eval_kernel_against_ref(
-            original_model_src=ref_arch_src,
-            custom_model_src=kernel_src,
-            measure_performance=configs.measure_performance,
-            verbose=configs.verbose,
-            num_correct_trials=configs.num_correct_trials,
-            num_perf_trials=configs.num_perf_trials,
-            build_dir=build_dir,
-            device=device,
-            backend=configs.backend,
-            precision=eval.get_torch_dtype_from_string(configs.precision),
-        )
+        if is_tilebench:
+            # Use TileBench evaluation
+            eval_result = eval_kernel_against_tilebench_ref(
+                reference_path=ref_arch_path,
+                custom_kernel_src=kernel_src,
+                backend=configs.backend,
+                verbose=configs.verbose,
+                measure_performance=configs.measure_performance,
+                num_correct_trials=configs.num_correct_trials,
+                num_perf_trials=configs.num_perf_trials,
+                precision=eval.get_torch_dtype_from_string(configs.precision),
+            )
+        else:
+            # Use KernelBench evaluation
+            eval_result = eval_kernel_against_ref(
+                original_model_src=ref_arch_src,
+                custom_model_src=kernel_src,
+                measure_performance=configs.measure_performance,
+                verbose=configs.verbose,
+                num_correct_trials=configs.num_correct_trials,
+                num_perf_trials=configs.num_perf_trials,
+                build_dir=build_dir,
+                device=device,
+                backend=configs.backend,
+                precision=eval.get_torch_dtype_from_string(configs.precision),
+            )
         return eval_result
     except Exception as e:
         print(
@@ -463,7 +508,7 @@ def batch_eval_modal(
                 # Prepare work items - fetch all data first
                 work_items = []
                 for problem_id, sample_id in curr_work_batch:
-                    ref_arch_src = fetch_ref_arch_from_problem_id(
+                    ref_arch_src, ref_arch_path, is_tilebench = fetch_ref_arch_from_problem_id(
                         curr_level_dataset, problem_id, config.dataset_src
                     )
                     kernel_src = fetch_kernel_from_disk(run_dir, config.level, problem_id, sample_id)
@@ -476,6 +521,8 @@ def batch_eval_modal(
                             'problem_id': problem_id,
                             'sample_id': sample_id,
                             'ref_arch_src': ref_arch_src,
+                            'ref_arch_path': ref_arch_path,
+                            'is_tilebench': is_tilebench,
                             'kernel_src': kernel_src,
                         })
                 
@@ -497,6 +544,8 @@ def batch_eval_modal(
                     else:
                         future = evaluator_cls().evaluate_single_sample_modal.spawn(
                             ref_arch_src=item['ref_arch_src'],
+                            ref_arch_path=item.get('ref_arch_path'),
+                            is_tilebench=item.get('is_tilebench', False),
                             kernel_src=item['kernel_src'],
                             gpu_arch=gpu_arch,
                             num_correct_trials=config.num_correct_trials,
@@ -761,7 +810,11 @@ def main(config: EvalConfig):
         dataset = load_dataset(config.dataset_name)
         curr_level_dataset = dataset[f"level_{config.level}"]
     elif config.dataset_src == "local":
-        curr_level_dataset = construct_kernelbench_dataset(config.level)
+        # Check if level is a string (TileBench) or integer (KernelBench)
+        if isinstance(config.level, str):
+            curr_level_dataset = construct_tilebench_dataset(config.level)
+        else:
+            curr_level_dataset = construct_kernelbench_dataset(config.level)
 
     num_problems_in_level = len(curr_level_dataset)
 
