@@ -44,42 +44,27 @@ def load_cuda_kernel_inline(
     kernel_name: str = "run",
 ) -> Callable:
     """
-    Load CUDA kernel using torch.utils.cpp_extension.load_inline
+    Load CUDA kernel - the kernel_source should be a Python function that uses load_inline
     
-    Expects kernel_source to contain:
-    - CUDA C++ code with __global__ kernels
-    - Python bindings via pybind11 exposing 'run' function
+    This executes the Python code which contains the 'run' function that internally
+    uses torch.utils.cpp_extension.load_inline
     
     Returns callable kernel function
     """
-    from torch.utils.cpp_extension import load_inline
+    # The kernel_source is expected to be Python code with a 'run()' function
+    # that uses load_inline internally. We just need to execute it and extract the function.
     
-    # Extract CUDA source and binding code
-    # Assume format with ///CUDA_SOURCE and ///BINDING sections or similar
+    # Create a namespace to execute the code in
+    namespace = {}
     
-    cuda_source = ""
-    cpp_source = ""
+    # Execute the kernel source code
+    exec(kernel_source, namespace)
     
-    if "//CUDA_SOURCE" in kernel_source and "//BINDING" in kernel_source:
-        parts = kernel_source.split("//BINDING")
-        cuda_source = parts[0].replace("//CUDA_SOURCE", "").strip()
-        cpp_source = parts[1].strip()
-    else:
-        # Try to parse as single file with both
-        cuda_source = kernel_source
-        cpp_source = ""
+    # Extract the run function
+    if kernel_name not in namespace:
+        raise AttributeError(f"Function '{kernel_name}' not found in generated code")
     
-    # Load the kernel
-    module = load_inline(
-        name=f"custom_kernel_{kernel_name}",
-        cpp_sources=[cpp_source] if cpp_source else [],
-        cuda_sources=[cuda_source],
-        functions=[kernel_name],
-        with_cuda=True,
-        build_directory=tempfile.mkdtemp(),
-    )
-    
-    return getattr(module, kernel_name)
+    return namespace[kernel_name]
 
 
 def load_triton_kernel(kernel_source: str, kernel_name: str = "run") -> Callable:

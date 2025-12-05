@@ -54,9 +54,9 @@ def set_gpu_arch(arch_list: list[str]):
 def query_server(
     prompt: str | list[dict],  # string if normal prompt, list of dicts if chat prompt,
     system_prompt: str = "You are a helpful assistant",  # only used for chat prompts
-    temperature: float = 0.0,
-    top_p: float = 1.0, # nucleus sampling
-    top_k: int = 50, 
+    temperature: float = None,  # Only pass if explicitly set
+    top_p: float = None,  # Only pass if explicitly set
+    top_k: int = None,  # Only pass if explicitly set
     max_tokens: int = 128,  # max output tokens to generate
     num_completions: int = 1,
     server_port: int = 30000,  # only for local server hosted on SGLang
@@ -80,25 +80,24 @@ def query_server(
         client = OpenAI(
             api_key=SGLANG_KEY, base_url=f"{url}/v1", timeout=None, max_retries=0
         )
+        # Build kwargs, only including params that were explicitly set
+        create_kwargs = {
+            "model": "default",
+            "n": num_completions,
+            "max_tokens": max_tokens,
+        }
+        if temperature is not None:
+            create_kwargs["temperature"] = temperature
+        if top_p is not None:
+            create_kwargs["top_p"] = top_p
+        
         if isinstance(prompt, str):
-            response = client.completions.create(
-                model="default",
-                prompt=prompt,
-                temperature=temperature,
-                n=num_completions,
-                max_tokens=max_tokens,
-                top_p=top_p,
-            )
+            create_kwargs["prompt"] = prompt
+            response = client.completions.create(**create_kwargs)
             outputs = [choice.text for choice in response.choices]
         else:
-            response = client.chat.completions.create(
-                model="default",
-                messages=prompt,
-                temperature=temperature,
-                n=num_completions,
-                max_tokens=max_tokens,
-                top_p=top_p,
-            )
+            create_kwargs["messages"] = prompt
+            response = client.chat.completions.create(**create_kwargs)
             outputs = [choice.message.content for choice in response.choices]
         
         # output processing
@@ -145,12 +144,14 @@ def query_server(
             if budget_tokens > 0 and "anthropic" in model_name.lower():
                 completion_kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget_tokens}
         else:
-            # Standard models support temperature and top_p
-            completion_kwargs["temperature"] = temperature
-            completion_kwargs["top_p"] = top_p
+            # Standard models: only pass params if explicitly set
+            if temperature is not None:
+                completion_kwargs["temperature"] = temperature
+            if top_p is not None:
+                completion_kwargs["top_p"] = top_p
             
             # top_k is not supported by OpenAI models
-            if "openai/" not in model_name.lower() and "gpt" not in model_name.lower():
+            if top_k is not None and "openai/" not in model_name.lower() and "gpt" not in model_name.lower():
                 completion_kwargs["top_k"] = top_k
         
         response = completion(**completion_kwargs)
@@ -236,8 +237,11 @@ def create_inference_server_from_presets(server_type: str = None,
         
         if greedy_sample:
             server_args["temperature"] = 0.0
-            server_args["top_p"] = 1.0
-            server_args["top_k"] = 1
+            # Only set top_p and top_k if not already set by user
+            if "top_p" not in filtered_kwargs:
+                server_args["top_p"] = 1.0
+            if "top_k" not in filtered_kwargs:
+                server_args["top_k"] = 1
         
         if verbose:
             print(f"Querying server {server_type} with model {server_args['model_name']} and args: {server_args}")

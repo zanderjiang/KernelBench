@@ -115,36 +115,31 @@ def format_reference_as_problem_description(reference_path: str) -> str:
     info = get_reference_info(reference_path)
     
     # Format config
-    config_str = "\n".join(f"    {k}: {v}" for k, v in info["config"].items())
+    config_str = "\n".join(f"# {k}: {v}" for k, v in info["config"].items())
     
-    problem_description = f'''"""
-Task: {info["task_name"]}
-
-Description:
-{info["description"]}
-
-Configuration:
+    # Format as simple code with clear instructions
+    # The key instruction is embedded as a comment
+    problem_description = f'''# Task: {info["task_name"]}
+# Description: {info["description"]}
+# 
 {config_str}
 
-Expected Function Signature:
+# IMPORTANT: Implement a standalone 'run()' function
+# Your output should be ONLY a function definition.
+
 def run({info["input_signature"]}):
     """
-    Implement efficient CUDA/Triton kernel for this operation.
+    {info["description"]}
     
-    Must match the behavior of the reference implementation.
-    Input/output should be torch tensors on the same device.
+    Args: {info["input_signature"]}
+    Returns: output tensor
+    
+    Use torch.utils.cpp_extension.load_inline to compile CUDA kernels inline.
+    Must match reference behavior within tolerance (atol=1e-2, rtol=1e-2).
     """
+    # TODO: Implement using load_inline with CUDA kernels
     # Your implementation here
-    ...
-    return output
-
-Requirements:
-- Implement the 'run' function that takes inputs as specified
-- Must produce output matching reference within tolerance (atol=1e-2, rtol=1e-2)  
-- Optimize for performance on modern GPUs
-- Use appropriate kernel launch configurations
-- Handle boundary conditions correctly
-"""
+    pass
 '''
     
     return problem_description
